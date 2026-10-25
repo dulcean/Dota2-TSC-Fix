@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    cat <<'HELP'
+Usage: dota2-tsc-fix COMMAND [ARG...]
+Steam launch options: /absolute/path/to/dota2-tsc-fix %command% -vulkan -novid
+
+By default, use all online logical CPUs except CPU 0.
+Override with DOTA_TSC_CPUS, for example DOTA_TSC_CPUS=1-11.
+Requires a systemd user session with the cpuset controller delegated.
+HELP
+}
+
+if [[ ${1:-} == --help || ${1:-} == -h ]]; then
+    usage
+    exit 0
+fi
+if (( $# == 0 )); then
+    usage >&2
+    exit 2
+fi
+if ! command -v systemd-run >/dev/null; then
+    echo 'dota2-tsc-fix: systemd-run is required.' >&2
+    exit 1
+fi
+
+
+
+
+cpus=${DOTA_TSC_CPUS:-}
+if [[ -z $cpus ]]; then
+    if ! IFS=, read -r -a ranges < /sys/devices/system/cpu/online; then
+        echo 'dota2-tsc-fix: cannot read online CPUs.' >&2
+        exit 1
+    fi
+    allowed=()
+    for range in "${ranges[@]}"; do
+        first=${range%-*}
+        last=${range#*-}
+        for ((cpu=first; cpu<=last; cpu++)); do
+            if (( cpu != 0 )); then allowed+=("$cpu"); fi
+        done
+    done
+    if (( ${#allowed[@]} == 0 )); then
+        echo 'dota2-tsc-fix: no online CPU remains after excluding CPU 0.' >&2
+        exit 1
+    fi
+    cpus=$(IFS=,; echo "${allowed[*]}")
+fi
+if [[ ! $cpus =~ ^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$ ]]; then
+    echo 'dota2-tsc-fix: DOTA_TSC_CPUS must be a CPU list such as 1-11 or 1,3-7.' >&2
+    exit 2
+fi
+
+exec systemd-run --user --scope --quiet --collect \
+    --property="AllowedCPUs=$cpus" -- "$@"
